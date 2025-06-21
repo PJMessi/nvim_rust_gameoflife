@@ -1,57 +1,84 @@
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use std::{env, error::Error, fs};
 
-#[derive(Debug, Deserialize)]
-struct RpcRequest {
-    jsonrpc: String,
-    method: String,
-    params: Option<serde_json::Value>,
-    id: Option<serde_json::Value>,
-}
+use rmpv::Value;
 
-#[derive(Debug, Serialize)]
-struct RpcResponse {
-    jsonrpc: &'static str,
-    result: serde_json::Value,
-    id: serde_json::Value,
+use tokio::fs::File as TokioFile;
+
+// Make sure you have async_trait in your Cargo.toml and imported
+use async_trait::async_trait;
+
+use nvim_rs::{Handler, Neovim, compat::tokio::Compat, create::tokio as create, rpc::IntoVal};
+
+#[derive(Clone)]
+struct NeovimHandler {}
+
+// Apply the async_trait macro
+#[async_trait]
+impl Handler for NeovimHandler {
+    type Writer = Compat<TokioFile>;
+
+    // The crucial change: add the lifetime parameter 'a to &self
+    async fn handle_request<'a>(
+        &'a self, // <-- IMPORTANT: Add this lifetime
+        name: String,
+        _args: Vec<Value>,
+        _neovim: Neovim<Compat<TokioFile>>,
+    ) -> Result<Value, Value> {
+        match name.as_ref() {
+            "ping" => Ok(Value::from("pong")),
+            _ => unimplemented!(),
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    let stdin = BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
-    let mut stdout = tokio::io::stdout();
+    eprintln!("Rust Neovim plugin started");
+    let handler: NeovimHandler = NeovimHandler {};
+    // Ensure you have tokio with "full" or "macros" and "rt-multi-thread" features in Cargo.toml
+    let (nvim, io_handler) = create::new_parent(handler).await.unwrap();
+    let curbuf = nvim.get_current_buf().await.unwrap();
 
-    let mut counter: u8 = 0;
+    let mut envargs = env::args();
+    let _ = envargs.next();
+    // let testfile = envargs.next().unwrap();
 
-    while let Ok(Some(line)) = lines.next_line().await {
-        let req: RpcRequest = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+    // fs::write(testfile, &format!("{:?}", curbuf.into_val())).unwrap();
 
-        if req.method == "say_hello" {
-            let name = req
-                .params
-                .as_ref()
-                .and_then(|p| p.get(0))
-                .and_then(|v| v.as_str())
-                .unwrap_or("world");
+    // Any error should probably be logged, as stderr is not visible to users.
+    match io_handler.await {
+        Err(joinerr) => eprintln!("Error joining IO loop: '{}'", joinerr),
+        Ok(Err(err)) => {
+            if !err.is_reader_error() {
+                // One last try, since there wasn't an error with writing to the
+                // stream
+                nvim.err_writeln(&format!("Error: '{}'", err))
+                    .await
+                    .unwrap_or_else(|e| {
+                        // We could inspect this error to see what was happening, and
+                        // maybe retry, but at this point it's probably best
+                        // to assume the worst and print a friendly and
+                        // supportive message to our users
+                        eprintln!("Well, dang... '{}'", e);
+                    });
+            }
 
-            let response = RpcResponse {
-                jsonrpc: "2.0",
-                result: json!(format!("Hello, {name} {counter}")),
-                id: req.id.unwrap_or(json!(null)),
-            };
+            if !err.is_channel_closed() {
+                // Closed channel usually means neovim quit itself, or this plugin was
+                // told to quit by closing the channel, so it's not always an error
+                // condition.
+                eprintln!("Error: '{}'", err);
 
-            counter += 1;
+                let mut source = err.source();
 
-            let resp = serde_json::to_string(&response).unwrap();
-            stdout.write_all(resp.as_bytes()).await.unwrap();
-            stdout.write_all(b"\n").await.unwrap();
-            stdout.flush().await.unwrap();
+                while let Some(e) = source {
+                    eprintln!("Caused by: '{}'", e);
+                    source = e.source();
+                }
+            }
         }
+        Ok(Ok(())) => {}
     }
+
+    eprintln!("Plugin exited gracefully");
 }
