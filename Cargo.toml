@@ -10,3 +10,4 @@ serde_json = "1.0.140"
 tokio = { version = "1.45.1", features = ["full"] }
 nvim-rs = { version = "0.9.2", features = ["use_tokio"] }
 async-trait = "0.1" # <-- ADD OR ENSURE THIS LINE IS PRESENT
+rand = "0.9.1"

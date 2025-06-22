@@ -1,48 +1,25 @@
-use std::{env, error::Error, fs};
+use internal::handler::NeovimHandler;
+use nvim_rs::create::tokio as create;
+use std::error::Error;
 
-use rmpv::Value;
-
-use tokio::fs::File as TokioFile;
-
-// Make sure you have async_trait in your Cargo.toml and imported
-use async_trait::async_trait;
-
-use nvim_rs::{Handler, Neovim, compat::tokio::Compat, create::tokio as create, rpc::IntoVal};
-
-#[derive(Clone)]
-struct NeovimHandler {}
-
-// Apply the async_trait macro
-#[async_trait]
-impl Handler for NeovimHandler {
-    type Writer = Compat<TokioFile>;
-
-    // The crucial change: add the lifetime parameter 'a to &self
-    async fn handle_request<'a>(
-        &'a self, // <-- IMPORTANT: Add this lifetime
-        name: String,
-        _args: Vec<Value>,
-        _neovim: Neovim<Compat<TokioFile>>,
-    ) -> Result<Value, Value> {
-        match name.as_ref() {
-            "ping" => Ok(Value::from("pong")),
-            _ => unimplemented!(),
-        }
-    }
+pub mod internal {
+    pub mod handler;
+    pub mod pingpong_handler;
+    pub mod app_handler;
+    pub mod game_handler;
 }
 
 #[tokio::main]
 async fn main() {
-    eprintln!("Rust Neovim plugin started");
-    let handler: NeovimHandler = NeovimHandler {};
-    // Ensure you have tokio with "full" or "macros" and "rt-multi-thread" features in Cargo.toml
+    eprintln!("plugin initialized");
+
+    let handler: NeovimHandler = NeovimHandler::new();
     let (nvim, io_handler) = create::new_parent(handler).await.unwrap();
-    let curbuf = nvim.get_current_buf().await.unwrap();
 
-    let mut envargs = env::args();
-    let _ = envargs.next();
+    // let curbuf = nvim.get_current_buf().await.unwrap();
+    // let mut envargs = env::args();
+    // let _ = envargs.next();
     // let testfile = envargs.next().unwrap();
-
     // fs::write(testfile, &format!("{:?}", curbuf.into_val())).unwrap();
 
     // Any error should probably be logged, as stderr is not visible to users.
@@ -80,5 +57,5 @@ async fn main() {
         Ok(Ok(())) => {}
     }
 
-    eprintln!("Plugin exited gracefully");
+    eprintln!("plugin exited gracefully");
 }
